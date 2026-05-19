@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { FeatureGroup, MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import {
@@ -351,10 +351,43 @@ function MainApp({ token, user, onLogout }) {
     setStatus("Achat du crédit en cours...");
 
     try {
-      const tx = await apiRequest(`/marketplace/purchase/${credit.id}`, { method: "POST" });
-      setTransaction(tx);
+      let purchaseToken = token;
+      let buyerLabel = "Acheteur RSE";
+
+      if (isFarmer && !isBuyer) {
+        const demoEmail = `buyer-demo-${Date.now()}@test.arbo`;
+        const demoResponse = await fetch(`${API_BASE}/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: demoEmail,
+            password: "testpass123",
+            role: "buyer",
+          }),
+        });
+        const demoData = await parseJson(demoResponse);
+        if (!demoResponse.ok) {
+          throw new Error(extractError(demoData, "Création de l'acheteur RSE démo impossible."));
+        }
+        purchaseToken = demoData.access_token;
+        buyerLabel = "Achat simulé par Acheteur RSE Démo";
+      }
+
+      const response = await fetch(`${API_BASE}/marketplace/purchase/${credit.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${purchaseToken}`,
+        },
+      });
+      const tx = await parseJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(tx, "Achat du crédit impossible."));
+      }
+
+      setTransaction({ ...tx, buyerLabel });
       await refreshMarketplace();
-      setStatus("Crédit acheté et transaction enregistrée.");
+      setStatus(buyerLabel === "Acheteur RSE" ? "Crédit acheté et transaction enregistrée." : buyerLabel);
     } catch (error) {
       setError(errorMessage(error));
       setStatus("");
@@ -411,7 +444,16 @@ function MainApp({ token, user, onLogout }) {
                     circle: false,
                     circlemarker: false,
                     marker: false,
-                    polygon: { allowIntersection: false, showArea: true },
+                    polygon: {
+                      shapeOptions: { color: "#2ECC71", weight: 3 },
+                      showArea: true,
+                      metric: true,
+                      feet: false,
+                      nautic: false,
+                      repeatMode: false,
+                      allowIntersection: false,
+                      finishOn: "click",
+                    },
                     polyline: true,
                   }}
                 />
@@ -453,7 +495,7 @@ function MainApp({ token, user, onLogout }) {
           {isFarmer && diagnostic && <DiagnosticPanel diagnostic={diagnostic} projectId={projectId} />}
           {isFarmer && solarResult && <SolarPanel solarResult={solarResult} />}
           {transaction && <TransactionPanel transaction={transaction} />}
-          <Marketplace credits={marketplace} canPurchase={isBuyer} onPurchase={purchaseCredit} loading={loading} />
+          <Marketplace credits={marketplace} canPurchase={isBuyer || isFarmer} onPurchase={purchaseCredit} loading={loading} isDemoBuyer={isFarmer && !isBuyer} />
         </aside>
       </main>
 
@@ -564,7 +606,7 @@ function SolarPanel({ solarResult }) {
   );
 }
 
-function Marketplace({ credits, canPurchase, onPurchase, loading }) {
+function Marketplace({ credits, canPurchase, onPurchase, loading, isDemoBuyer }) {
   return (
     <section style={styles.panelCard}>
       <div style={styles.sectionHeaderCompact}>
@@ -582,7 +624,9 @@ function Marketplace({ credits, canPurchase, onPurchase, loading }) {
                 <p style={styles.compactText}>Vintage {credit.vintage_year} · {Number(credit.price_eur).toFixed(2)} € · {credit.status}</p>
               </div>
               {canPurchase && credit.status === "available" && (
-                <button type="button" disabled={loading} onClick={() => onPurchase(credit)} style={styles.smallButton}>Acheter</button>
+                <button type="button" disabled={loading} onClick={() => onPurchase(credit)} style={styles.smallButton}>
+                  {isDemoBuyer ? "Acheter en démo" : "Acheter"}
+                </button>
               )}
             </article>
           ))}
@@ -596,11 +640,12 @@ function TransactionPanel({ transaction }) {
   return (
     <section style={styles.panelCard}>
       <h2 style={styles.panelTitle}>Transaction</h2>
-      <div style={styles.revenueBox}>
-        <span>Montant : <strong>{Number(transaction.amount_eur).toFixed(2)} €</strong></span>
-        <span>Agriculteur : <strong>{Number(transaction.farmer_payout_eur).toFixed(2)} €</strong></span>
-        <span>Commission ARBO : <strong>{Number(transaction.platform_fee_eur).toFixed(2)} €</strong></span>
-        <span>Référence : <strong>{transaction.payment_reference}</strong></span>
+      {transaction.buyerLabel && <p style={styles.statusText}>{transaction.buyerLabel}</p>}
+      <div style={styles.transactionBreakdown}>
+        <span style={styles.transactionGross}>Prix brut du crédit : <strong>{Number(transaction.amount_eur).toFixed(2)} €</strong></span>
+        <span style={styles.transactionPayout}>✅ Reversé à l'agriculteur (85%) : <strong>{Number(transaction.farmer_payout_eur).toFixed(2)} €</strong></span>
+        <span style={styles.transactionFee}>🏦 Commission ARBO (15%) : <strong>{Number(transaction.platform_fee_eur).toFixed(2)} €</strong></span>
+        <span style={styles.transactionRef}>Référence transaction : <strong>{transaction.payment_reference}</strong></span>
       </div>
     </section>
   );
@@ -799,6 +844,11 @@ const styles = {
   countBadge: { background: COLORS.forest, color: COLORS.cream, borderRadius: 999, padding: "5px 9px", fontSize: 12, fontWeight: 900 },
   messageBox: { margin: "12px 0 0", background: "rgba(15,61,36,0.06)", borderRadius: 14, padding: 12, color: COLORS.text, lineHeight: 1.45 },
   revenueBox: { marginTop: 12, display: "grid", gap: 7, background: COLORS.mint, borderRadius: 14, padding: 12 },
+  transactionBreakdown: { marginTop: 12, display: "grid", gap: 10, background: COLORS.cream, border: `1px solid ${COLORS.border}`, borderRadius: 16, padding: 14 },
+  transactionGross: { color: COLORS.text, fontWeight: 800 },
+  transactionPayout: { color: COLORS.emerald, fontWeight: 900 },
+  transactionFee: { color: COLORS.muted, fontWeight: 800 },
+  transactionRef: { color: COLORS.forest, fontWeight: 800 },
   compactText: { margin: 0, color: COLORS.muted, fontSize: 13, lineHeight: 1.4 },
   creditCard: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: 12 },
   smallButton: { border: 0, background: COLORS.forest, color: COLORS.cream, borderRadius: 999, padding: "9px 12px", fontWeight: 900, cursor: "pointer" },
