@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ARBO global resets */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background-color: #0f3d24;
+  color: #faf9f6;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Leaflet draw toolbar — re-skinned to match the dark theme.
+   The lib ships a light skin by default which clashes badly with our
+   forest background, so we override the most visible bits. */
+.leaflet-draw-toolbar a {
+  background-color: #163e2a !important;
+  border-color: #1f8f4f !important;
+}
+.leaflet-draw-toolbar a:hover {
+  background-color: #2ecc71 !important;
+}
+.leaflet-bar {
+  border-color: #1f8f4f !important;
+}
+
+/* Tooltip and attribution legibility */
+.leaflet-control-attribution {
+  background-color: rgba(15, 61, 36, 0.85) !important;
+  color: #faf9f6 !important;
+}
+.leaflet-control-attribution a {
+  color: #2ecc71 !important;
+}
+
+/* Scrollbar polish in dark theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0f3d24;
+}
+::-webkit-scrollbar-thumb {
+  background: #1f8f4f;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2ecc71;
+}
