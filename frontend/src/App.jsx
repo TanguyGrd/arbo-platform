@@ -1,9 +1,19 @@
-﻿import { useCallback, useEffect, useRef, useState } from "react";
-import { FeatureGroup, MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FeatureGroup,
+  MapContainer,
+  Marker,
+  TileLayer,
+  CircleMarker,
+  Popup,
+  useMap,
+} from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -43,18 +53,22 @@ function App() {
     setUser(nextUser);
   }
 
-  function logout() {
+  const logout = useCallback(() => {
     localStorage.removeItem("arbo_token");
     localStorage.removeItem("arbo_user");
     setToken("");
     setUser(null);
-  }
+  }, []);
 
   if (!token || !user) {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
-  return <MainApp token={token} user={user} onLogout={logout} />;
+  if (user.role === "buyer") {
+    return <BuyerApp token={token} user={user} onLogout={logout} />;
+  }
+
+  return <FarmerApp token={token} user={user} onLogout={logout} />;
 }
 
 function AuthScreen({ onAuthenticated }) {
@@ -95,7 +109,7 @@ function AuthScreen({ onAuthenticated }) {
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <p style={styles.logoKicker}>ARBO</p>
           <h1 style={styles.authTitle}>Plateforme agroforestière</h1>
-          <p style={styles.authSubtitle}>Design parcellaire, diagnostic carbone et marketplace de crédits LBC.</p>
+          <p style={styles.authSubtitle}>Design agricole pour les farmers, marketplace carbone pour les buyers.</p>
         </div>
 
         <div style={styles.authTabs}>
@@ -129,16 +143,19 @@ function AuthScreen({ onAuthenticated }) {
   );
 }
 
-function MainApp({ token, user, onLogout }) {
+function FarmerApp({ token, user, onLogout }) {
+  const [activeTab, setActiveTab] = useState("design");
   const [farm, setFarm] = useState(null);
-  const [marketplace, setMarketplace] = useState([]);
   const [plotGeojson, setPlotGeojson] = useState(null);
   const [lineGeojson, setLineGeojson] = useState(null);
   const [plotId, setPlotId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [diagnostic, setDiagnostic] = useState(null);
   const [solarResult, setSolarResult] = useState(null);
-  const [transaction, setTransaction] = useState(null);
+  const [listings, setListings] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
+  const [focusedPlot, setFocusedPlot] = useState(null);
+  const [editingListing, setEditingListing] = useState(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -154,61 +171,38 @@ function MainApp({ token, user, onLogout }) {
   });
   const featureGroupRef = useRef(null);
 
-  const isFarmer = user.role === "farmer" || user.role === "admin";
-  const isBuyer = user.role === "buyer" || user.role === "admin";
+  const apiRequest = useApi(token, onLogout);
 
-  const apiRequest = useCallback(async (path, options = {}) => {
-    const response = await fetch(`${API_BASE}${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        ...(options.headers || {}),
-      },
-    });
-    const data = await parseJson(response);
-    if (response.status === 401) {
-      onLogout();
-      throw new Error("Session expirée. Merci de vous reconnecter.");
-    }
-    if (!response.ok) {
-      throw new Error(extractError(data, "Requête impossible."));
-    }
-    return data;
-  }, [onLogout, token]);
-
-  const refreshMarketplace = useCallback(async () => {
-    try {
-      const credits = await apiRequest("/marketplace/credits");
-      setMarketplace(Array.isArray(credits) ? credits : []);
-    } catch (error) {
-      setError(errorMessage(error));
-    }
+  const refreshFarmerData = useCallback(async () => {
+    const [projects, stats] = await Promise.all([
+      apiRequest("/farmer/projects"),
+      apiRequest("/farmer/dashboard"),
+    ]);
+    setListings(Array.isArray(projects) ? projects : []);
+    setDashboard(stats);
   }, [apiRequest]);
 
   useEffect(() => {
     async function bootstrap() {
       setError("");
       try {
-        if (isFarmer) {
-          const farms = await apiRequest("/farms");
-          if (farms.length > 0) {
-            setFarm(farms[0]);
-          } else {
-            const createdFarm = await apiRequest("/farms", {
-              method: "POST",
-              body: JSON.stringify({ name: "Ferme principale", country_code: "FR", region: "Nouvelle-Aquitaine" }),
-            });
-            setFarm(createdFarm);
-          }
+        const farms = await apiRequest("/farms");
+        if (farms.length > 0) {
+          setFarm(farms[0]);
+        } else {
+          const createdFarm = await apiRequest("/farms", {
+            method: "POST",
+            body: JSON.stringify({ name: "Ferme principale", country_code: "FR", region: "Nouvelle-Aquitaine" }),
+          });
+          setFarm(createdFarm);
         }
-        await refreshMarketplace();
+        await refreshFarmerData();
       } catch (error) {
         setError(errorMessage(error));
       }
     }
     bootstrap();
-  }, [apiRequest, isFarmer, refreshMarketplace]);
+  }, [apiRequest, refreshFarmerData]);
 
   function onCreated(event) {
     const geojson = event.layer.toGeoJSON().geometry;
@@ -246,7 +240,6 @@ function MainApp({ token, user, onLogout }) {
     setError("");
     setStatus("Création de la parcelle et calcul du diagnostic...");
     setSolarResult(null);
-    setTransaction(null);
 
     try {
       const plot = await apiRequest("/plots", {
@@ -304,9 +297,10 @@ function MainApp({ token, user, onLogout }) {
         }),
       });
       setProjectId(project.id);
-      await apiRequest(`/projects/${project.id}/list-on-marketplace`, { method: "POST" });
-      await refreshMarketplace();
-      setStatus("Projet certifié MVP et crédits publiés sur la marketplace.");
+      const listed = await apiRequest(`/projects/${project.id}/list-on-marketplace`, { method: "POST" });
+      await refreshFarmerData();
+      const available = Math.floor(Number(listed.estimated_tco2 || 0));
+      setStatus(`✅ Crédits publiés sur la marketplace - ${available} crédits disponibles à la vente`);
     } catch (error) {
       setError(errorMessage(error));
       setStatus("");
@@ -323,7 +317,7 @@ function MainApp({ token, user, onLogout }) {
 
     setLoading(true);
     setError("");
-    setStatus("☀️ Simulation solaire en cours (~5s)...");
+    setStatus("☀️ Simulation solaire en cours...");
 
     try {
       const result = await apiRequest(`/solar/simulate/${plotId}`, {
@@ -345,54 +339,57 @@ function MainApp({ token, user, onLogout }) {
     }
   }
 
-  async function purchaseCredit(credit) {
+  async function updateListingPrice(listing, nextPrice) {
     setLoading(true);
     setError("");
-    setStatus("Achat du crédit en cours...");
-
     try {
-      let purchaseToken = token;
-      let buyerLabel = "Acheteur RSE";
-
-      if (isFarmer && !isBuyer) {
-        const demoEmail = `buyer-demo-${Date.now()}@test.arbo`;
-        const demoResponse = await fetch(`${API_BASE}/auth/register`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: demoEmail,
-            password: "testpass123",
-            role: "buyer",
-          }),
-        });
-        const demoData = await parseJson(demoResponse);
-        if (!demoResponse.ok) {
-          throw new Error(extractError(demoData, "Création de l'acheteur RSE démo impossible."));
-        }
-        purchaseToken = demoData.access_token;
-        buyerLabel = "Achat simulé par Acheteur RSE Démo";
-      }
-
-      const response = await fetch(`${API_BASE}/marketplace/purchase/${credit.id}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${purchaseToken}`,
-        },
+      await apiRequest(`/projects/${listing.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ price_per_credit_eur: Number(nextPrice) }),
       });
-      const tx = await parseJson(response);
-      if (!response.ok) {
-        throw new Error(extractError(tx, "Achat du crédit impossible."));
-      }
-
-      setTransaction({ ...tx, buyerLabel });
-      await refreshMarketplace();
-      setStatus(buyerLabel === "Acheteur RSE" ? "Crédit acheté et transaction enregistrée." : buyerLabel);
+      await refreshFarmerData();
+      setEditingListing(null);
+      setStatus("Prix de l'annonce mis à jour.");
     } catch (error) {
       setError(errorMessage(error));
-      setStatus("");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function withdrawListing(listing) {
+    setLoading(true);
+    setError("");
+    try {
+      await apiRequest(`/projects/${listing.id}/withdraw`, { method: "POST" });
+      await refreshFarmerData();
+      setStatus("Annonce retirée de la marketplace.");
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function relistListing(listing) {
+    setLoading(true);
+    setError("");
+    try {
+      await apiRequest(`/projects/${listing.id}/relist`, { method: "POST" });
+      await refreshFarmerData();
+      setStatus("Annonce remise sur la marketplace.");
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function viewPlot(listing) {
+    if (listing.plot_geometry) {
+      setFocusedPlot(listing.plot_geometry);
+      setActiveTab("design");
+      setStatus("Carte centrée sur la parcelle sélectionnée.");
     }
   }
 
@@ -404,27 +401,22 @@ function MainApp({ token, user, onLogout }) {
     setDiagnostic(null);
     setSolarResult(null);
     setStatus("Dessins réinitialisés.");
-    if (featureGroupRef.current) {
-      featureGroupRef.current.clearLayers();
-    }
+    featureGroupRef.current?.clearLayers();
   }
 
-  return (
-    <div style={styles.appShell}>
-      <header style={styles.header}>
-        <div>
-          <p style={styles.headerKicker}>ARBO</p>
-          <h1 style={styles.headerTitle}>Design agroforestier & crédits carbone</h1>
-        </div>
-        <div style={styles.userPill}>
-          <span>{user.email}</span>
-          <strong>{labelRole(user.role)}</strong>
-          <button type="button" onClick={onLogout} style={styles.logoutButton}>Déconnexion</button>
-        </div>
-      </header>
+  const latestSale = dashboard?.recent_transactions?.[0];
 
-      <main style={styles.dashboardGrid}>
-        {isFarmer && (
+  return (
+    <Shell user={user} badge="Agriculteur" onLogout={onLogout} tabs={[
+      ["design", "Carte de conception"],
+      ["listings", "Mes annonces"],
+      ["dashboard", "Tableau de bord"],
+    ]} activeTab={activeTab} setActiveTab={setActiveTab}>
+      {status && <Toast>{status}</Toast>}
+      {error && <p style={styles.errorText}>{error}</p>}
+
+      {activeTab === "design" && (
+        <main style={styles.dashboardGrid}>
           <section style={styles.mapCard}>
             <div style={styles.sectionHeader}>
               <div>
@@ -435,6 +427,7 @@ function MainApp({ token, user, onLogout }) {
             </div>
             <MapContainer center={BORDEAUX} zoom={13} style={styles.map} scrollWheelZoom>
               <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              <MapFocus geometry={focusedPlot} />
               <FeatureGroup ref={featureGroupRef}>
                 <EditControl
                   position="topright"
@@ -475,33 +468,172 @@ function MainApp({ token, user, onLogout }) {
               ))}
             </MapContainer>
           </section>
-        )}
 
-        <aside style={isFarmer ? styles.sidePanel : styles.buyerPanel}>
-          {isFarmer && (
-            <>
-              <DesignSettings settings={settings} updateSetting={updateSetting} farm={farm} plotGeojson={plotGeojson} lineGeojson={lineGeojson} />
-              <div style={styles.actionStack}>
-                <button type="button" disabled={loading} onClick={runDiagnostic} style={primaryButtonStyle(loading)}>Lancer le diagnostic</button>
-                <button type="button" disabled={loading || !diagnostic} onClick={certifyAndPublish} style={secondaryButtonStyle(!diagnostic || loading)}>Certifier & publier</button>
-                <button type="button" disabled={loading || !plotId} onClick={simulateSolarShade} style={primaryButtonStyle(loading || !plotId)}>Simuler ombrage solaire</button>
-              </div>
-            </>
-          )}
+          <aside style={styles.sidePanel}>
+            <DesignSettings settings={settings} updateSetting={updateSetting} farm={farm} plotGeojson={plotGeojson} lineGeojson={lineGeojson} />
+            <div style={styles.actionStack}>
+              <button type="button" disabled={loading} onClick={runDiagnostic} style={primaryButtonStyle(loading)}>Lancer le diagnostic</button>
+              <button type="button" disabled={loading || !diagnostic} onClick={certifyAndPublish} style={secondaryButtonStyle(!diagnostic || loading)}>Certifier & publier</button>
+              <button type="button" disabled={loading || !plotId} onClick={simulateSolarShade} style={primaryButtonStyle(loading || !plotId)}>Simuler ombrage solaire</button>
+            </div>
+            {diagnostic && <DiagnosticPanel diagnostic={diagnostic} projectId={projectId} />}
+            {solarResult && <SolarPanel solarResult={solarResult} />}
+            {latestSale && <FarmerSalePanel transaction={latestSale} />}
+          </aside>
+        </main>
+      )}
 
-          {status && <p style={styles.statusText}>{status}</p>}
-          {error && <p style={styles.errorText}>{error}</p>}
+      {activeTab === "listings" && (
+        <FarmerListings listings={listings} loading={loading} onEdit={setEditingListing} onWithdraw={withdrawListing} onRelist={relistListing} onViewPlot={viewPlot} />
+      )}
 
-          {isFarmer && diagnostic && <DiagnosticPanel diagnostic={diagnostic} projectId={projectId} />}
-          {isFarmer && solarResult && <SolarPanel solarResult={solarResult} />}
-          {transaction && <TransactionPanel transaction={transaction} />}
-          <Marketplace credits={marketplace} canPurchase={isBuyer || isFarmer} onPurchase={purchaseCredit} loading={loading} isDemoBuyer={isFarmer && !isBuyer} />
-        </aside>
-      </main>
+      {activeTab === "dashboard" && (
+        <FarmerDashboard dashboard={dashboard} />
+      )}
 
-      <footer style={styles.footer}>
-        MVP de démonstration. Les crédits carbone générés ne sont pas certifiés officiellement Label Bas-Carbone.
-      </footer>
+      {editingListing && (
+        <PriceModal listing={editingListing} loading={loading} onClose={() => setEditingListing(null)} onSave={updateListingPrice} />
+      )}
+    </Shell>
+  );
+}
+
+function BuyerApp({ token, user, onLogout }) {
+  const [activeTab, setActiveTab] = useState("marketplace");
+  const [credits, setCredits] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
+  const [mapFocus, setMapFocus] = useState(null);
+  const [filters, setFilters] = useState(defaultFilters());
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const apiRequest = useApi(token, onLogout);
+
+  const refreshBuyerData = useCallback(async () => {
+    const [market, stats] = await Promise.all([
+      apiRequest("/marketplace/credits"),
+      apiRequest("/buyer/dashboard"),
+    ]);
+    setCredits(Array.isArray(market) ? market : []);
+    setDashboard(stats);
+  }, [apiRequest]);
+
+  useEffect(() => {
+    refreshBuyerData().catch((error) => setError(errorMessage(error)));
+  }, [refreshBuyerData]);
+
+  const filteredCredits = useMemo(() => {
+    return credits.filter((credit) => {
+      const price = Number(credit.price_eur);
+      const duration = Number(credit.project_duration_years);
+      const region = (credit.farm_region || "").toLowerCase();
+      return (
+        (filters.species === "all" || credit.species === filters.species) &&
+        (!filters.region || region.includes(filters.region.toLowerCase())) &&
+        (!filters.priceMin || price >= Number(filters.priceMin)) &&
+        (!filters.priceMax || price <= Number(filters.priceMax)) &&
+        (!filters.durationMin || duration >= Number(filters.durationMin)) &&
+        (!filters.durationMax || duration <= Number(filters.durationMax))
+      );
+    });
+  }, [credits, filters]);
+
+  async function purchaseCredit(credit) {
+    setLoading(true);
+    setError("");
+    setStatus("Achat du crédit en cours...");
+    try {
+      await apiRequest(`/marketplace/purchase/${credit.id}`, { method: "POST" });
+      await refreshBuyerData();
+      setStatus("Crédit acheté et ajouté à Mes crédits.");
+      setActiveTab("credits");
+    } catch (error) {
+      setError(errorMessage(error));
+      setStatus("");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openCertificate(creditId) {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/credits/${creditId}/certificate`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const html = await response.text();
+      if (!response.ok) {
+        throw new Error(extractError(safeJson(html), "Certificat indisponible."));
+      }
+      const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+      window.open(url, "_blank", "noopener,noreferrer");
+      setStatus("Certificat ouvert dans un nouvel onglet.");
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function focusCreditPlot(credit) {
+    if (credit.plot_geometry) {
+      setMapFocus(credit.plot_geometry);
+      setStatus("Carte centrée sur la parcelle marketplace.");
+    }
+  }
+
+  return (
+    <Shell user={user} badge="Acheteur RSE" onLogout={onLogout} tabs={[
+      ["marketplace", "Marketplace"],
+      ["credits", "Mes crédits"],
+    ]} activeTab={activeTab} setActiveTab={setActiveTab}>
+      {status && <Toast>{status}</Toast>}
+      {error && <p style={styles.errorText}>{error}</p>}
+
+      {activeTab === "marketplace" && (
+        <BuyerMarketplace
+          credits={filteredCredits}
+          filters={filters}
+          setFilters={setFilters}
+          resetFilters={() => setFilters(defaultFilters())}
+          loading={loading}
+          onPurchase={purchaseCredit}
+          onViewPlot={focusCreditPlot}
+          mapFocus={mapFocus}
+        />
+      )}
+
+      {activeTab === "credits" && (
+        <BuyerCredits dashboard={dashboard} loading={loading} onCertificate={openCertificate} />
+      )}
+    </Shell>
+  );
+}
+
+function Shell({ user, badge, onLogout, tabs, activeTab, setActiveTab, children }) {
+  return (
+    <div style={styles.appShell}>
+      <header style={styles.header}>
+        <div>
+          <p style={styles.headerKicker}>ARBO</p>
+          <h1 style={styles.headerTitle}>Plateforme carbone agroforestière</h1>
+        </div>
+        <div style={styles.userPill}>
+          <span>{user.email}</span>
+          <strong style={styles.roleBadge}>{badge}</strong>
+          <button type="button" onClick={onLogout} style={styles.logoutButton}>Déconnexion</button>
+        </div>
+      </header>
+      <nav style={styles.topTabs}>
+        {tabs.map(([key, label]) => (
+          <button key={key} type="button" onClick={() => setActiveTab(key)} style={topTabStyle(activeTab === key)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      {children}
+      <footer style={styles.footer}>MVP de démonstration. Les crédits carbone générés ne sont pas certifiés officiellement Label Bas-Carbone.</footer>
     </div>
   );
 }
@@ -606,49 +738,280 @@ function SolarPanel({ solarResult }) {
   );
 }
 
-function Marketplace({ credits, canPurchase, onPurchase, loading, isDemoBuyer }) {
+function FarmerSalePanel({ transaction }) {
+  return (
+    <section style={styles.panelCard}>
+      <h2 style={styles.panelTitle}>Dernière vente sur vos crédits</h2>
+      <div style={styles.transactionBreakdown}>
+        <span style={styles.transactionGross}>Prix brut : <strong>{Number(transaction.amount_eur).toFixed(2)} €</strong></span>
+        <span style={styles.transactionPayout}>Reversé à l'agriculteur (85%) : <strong>{Number(transaction.farmer_payout_eur).toFixed(2)} €</strong></span>
+        <span style={styles.transactionRef}>Crédit : <strong>{transaction.credit_serial}</strong></span>
+      </div>
+    </section>
+  );
+}
+
+function FarmerListings({ listings, loading, onEdit, onWithdraw, onRelist, onViewPlot }) {
   return (
     <section style={styles.panelCard}>
       <div style={styles.sectionHeaderCompact}>
-        <h2 style={styles.panelTitle}>Marketplace carbone</h2>
-        <span style={styles.countBadge}>{credits.length} crédits</span>
+        <h2 style={styles.panelTitle}>Mes annonces</h2>
+        <span style={styles.countBadge}>{listings.length} projets</span>
       </div>
-      {credits.length === 0 ? (
-        <p style={styles.compactText}>Aucun crédit disponible pour le moment.</p>
+      {listings.length === 0 ? (
+        <p style={styles.compactText}>Aucun projet carbone publié ou brouillon pour le moment.</p>
       ) : (
-        <div style={{ display: "grid", gap: 10 }}>
-          {credits.slice(0, 20).map((credit) => (
-            <article key={credit.id} style={styles.creditCard}>
-              <div>
-                <strong>{credit.serial_number}</strong>
-                <p style={styles.compactText}>Vintage {credit.vintage_year} · {Number(credit.price_eur).toFixed(2)} € · {credit.status}</p>
-              </div>
-              {canPurchase && credit.status === "available" && (
-                <button type="button" disabled={loading} onClick={() => onPurchase(credit)} style={styles.smallButton}>
-                  {isDemoBuyer ? "Acheter en démo" : "Acheter"}
-                </button>
-              )}
-            </article>
-          ))}
+        <div style={styles.tableShell}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th>Projet</th>
+                <th>Status</th>
+                <th>Crédits</th>
+                <th>Prix</th>
+                <th>Revenus</th>
+                <th>Certification</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {listings.map((listing) => (
+                <tr key={listing.id}>
+                  <td>
+                    <strong>{listing.name}</strong>
+                    <p style={styles.compactText}>{listing.farm_name} · {listing.plot_name || "Parcelle"}</p>
+                  </td>
+                  <td><span style={listing.status === "Retiré" ? styles.warningBadge : styles.successBadge}>{listing.status}</span></td>
+                  <td>{listing.total_credits} total · {listing.sold_credits} vendus · {listing.available_credits} dispo</td>
+                  <td>{Number(listing.price_per_credit_eur).toFixed(2)} €</td>
+                  <td>{Number(listing.revenue_generated_eur).toFixed(2)} €</td>
+                  <td>{formatDate(listing.certified_at)}</td>
+                  <td>
+                    <div style={styles.inlineActions}>
+                      <button type="button" disabled={loading} onClick={() => onEdit(listing)} style={styles.tinyButton}>Modifier le prix</button>
+                      {listing.status === "Retiré" ? (
+                        <button type="button" disabled={loading} onClick={() => onRelist(listing)} style={styles.tinyButton}>Remettre sur la marketplace</button>
+                      ) : (
+                        <button type="button" disabled={loading || listing.available_credits === 0} onClick={() => onWithdraw(listing)} style={styles.tinyButton}>Retirer de la marketplace</button>
+                      )}
+                      <button type="button" onClick={() => onViewPlot(listing)} style={styles.tinyButton}>Voir la parcelle</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
   );
 }
 
-function TransactionPanel({ transaction }) {
+function FarmerDashboard({ dashboard }) {
+  const monthly = dashboard?.monthly_sales || [];
   return (
     <section style={styles.panelCard}>
-      <h2 style={styles.panelTitle}>Transaction</h2>
-      {transaction.buyerLabel && <p style={styles.statusText}>{transaction.buyerLabel}</p>}
-      <div style={styles.transactionBreakdown}>
-        <span style={styles.transactionGross}>Prix brut du crédit : <strong>{Number(transaction.amount_eur).toFixed(2)} €</strong></span>
-        <span style={styles.transactionPayout}>✅ Reversé à l'agriculteur (85%) : <strong>{Number(transaction.farmer_payout_eur).toFixed(2)} €</strong></span>
-        <span style={styles.transactionFee}>🏦 Commission ARBO (15%) : <strong>{Number(transaction.platform_fee_eur).toFixed(2)} €</strong></span>
-        <span style={styles.transactionRef}>Référence transaction : <strong>{transaction.payment_reference}</strong></span>
+      <h2 style={styles.panelTitle}>Tableau de bord farmer</h2>
+      <div style={styles.fourStatGrid}>
+        <StatCard label="Revenus totaux" value={`${Number(dashboard?.total_revenue_eur || 0).toFixed(2)} €`} />
+        <StatCard label="Crédits vendus" value={dashboard?.credits_sold || 0} />
+        <StatCard label="Crédits disponibles" value={dashboard?.credits_available || 0} />
+        <StatCard label="tCO2 séquestré" value={Number(dashboard?.total_tco2 || 0).toFixed(1)} />
+      </div>
+      <div style={styles.chartBox}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={monthly}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,61,36,0.12)" />
+            <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(value, name) => [Number(value).toFixed(name === "sales" ? 0 : 2), name === "sales" ? "Ventes" : "Payout €"]} />
+            <Bar dataKey="sales" fill={COLORS.emerald} />
+            <Bar dataKey="payout_eur" fill={COLORS.forest} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <RecentTransactions rows={dashboard?.recent_transactions || []} />
+    </section>
+  );
+}
+
+function RecentTransactions({ rows }) {
+  return (
+    <div style={styles.tableShell}>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Crédit</th>
+            <th>Acheteur</th>
+            <th>Montant brut</th>
+            <th>Payout reçu</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr><td colSpan="5">Aucune vente enregistrée.</td></tr>
+          ) : rows.map((row) => (
+            <tr key={`${row.credit_serial}-${row.date}`}>
+              <td>{formatDate(row.date)}</td>
+              <td>{row.credit_serial}</td>
+              <td>{row.buyer_email || "N/A"}</td>
+              <td>{Number(row.amount_eur).toFixed(2)} €</td>
+              <td>{Number(row.farmer_payout_eur).toFixed(2)} €</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BuyerMarketplace({ credits, filters, setFilters, resetFilters, loading, onPurchase, onViewPlot, mapFocus }) {
+  return (
+    <main style={styles.marketplaceGrid}>
+      <section style={styles.panelCard}>
+        <div style={styles.sectionHeaderCompact}>
+          <h2 style={styles.panelTitle}>Marketplace</h2>
+          <span style={styles.countBadge}>{credits.length} crédits</span>
+        </div>
+        <MarketplaceFilters filters={filters} setFilters={setFilters} resetFilters={resetFilters} />
+        <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+          {credits.length === 0 ? (
+            <p style={styles.compactText}>Aucun crédit disponible avec ces filtres.</p>
+          ) : credits.slice(0, 80).map((credit) => (
+            <article key={credit.id} style={styles.creditCard}>
+              <div>
+                <strong>{credit.serial_number}</strong>
+                <p style={styles.compactText}>{credit.farm_name} · {credit.farm_region || "Région N/A"} · {speciesLabel(credit.species)} · {credit.project_duration_years} ans</p>
+                <p style={styles.compactText}>GPS {formatGps(credit)} · {Number(credit.price_eur).toFixed(2)} €</p>
+              </div>
+              <div style={styles.inlineActions}>
+                <button type="button" onClick={() => onViewPlot(credit)} style={styles.tinyButton}>Voir la parcelle</button>
+                <button type="button" disabled={loading} onClick={() => onPurchase(credit)} style={styles.smallButton}>Acheter</button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+      <section style={styles.mapCard}>
+        <h2 style={styles.panelTitle}>Carte des projets</h2>
+        <MapContainer center={BORDEAUX} zoom={7} style={styles.marketMap} scrollWheelZoom>
+          <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <MapFocus geometry={mapFocus} />
+          {credits.filter((credit) => credit.centroid_lat && credit.centroid_lng).map((credit) => (
+            <Marker key={credit.id} position={[credit.centroid_lat, credit.centroid_lng]}>
+              <Popup>
+                <strong>{credit.farm_name}</strong><br />
+                {speciesLabel(credit.species)} · {Number(credit.price_eur).toFixed(2)} €
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      </section>
+    </main>
+  );
+}
+
+function MarketplaceFilters({ filters, setFilters, resetFilters }) {
+  function setFilter(key, value) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+  return (
+    <div style={styles.filterGrid}>
+      <Field label="Essence">
+        <select value={filters.species} onChange={(event) => setFilter("species", event.target.value)} style={styles.input}>
+          <option value="all">Tous</option>
+          {SPECIES.map((species) => <option key={species} value={species}>{speciesLabel(species)}</option>)}
+        </select>
+      </Field>
+      <Field label="Région">
+        <input value={filters.region} onChange={(event) => setFilter("region", event.target.value)} placeholder="Nouvelle-Aquitaine" style={styles.input} />
+      </Field>
+      <Field label="Prix min (€)">
+        <input type="number" min="0" value={filters.priceMin} onChange={(event) => setFilter("priceMin", event.target.value)} style={styles.input} />
+      </Field>
+      <Field label="Prix max (€)">
+        <input type="number" min="0" value={filters.priceMax} onChange={(event) => setFilter("priceMax", event.target.value)} style={styles.input} />
+      </Field>
+      <Field label="Durée min">
+        <input type="number" min="0" value={filters.durationMin} onChange={(event) => setFilter("durationMin", event.target.value)} style={styles.input} />
+      </Field>
+      <Field label="Durée max">
+        <input type="number" min="0" value={filters.durationMax} onChange={(event) => setFilter("durationMax", event.target.value)} style={styles.input} />
+      </Field>
+      <button type="button" onClick={resetFilters} style={secondaryButtonStyle(false)}>Réinitialiser</button>
+    </div>
+  );
+}
+
+function BuyerCredits({ dashboard, loading, onCertificate }) {
+  return (
+    <section style={styles.panelCard}>
+      <h2 style={styles.panelTitle}>Mes crédits</h2>
+      <div style={styles.threeStatGrid}>
+        <StatCard label="tCO2 compensé total" value={Number(dashboard?.total_tco2_compensated || 0).toFixed(0)} />
+        <StatCard label="Crédits possédés" value={dashboard?.credits_owned || 0} />
+        <StatCard label="Total dépensé" value={`${Number(dashboard?.total_spent_eur || 0).toFixed(2)} €`} />
+      </div>
+      <div style={styles.tableShell}>
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th>Serial number</th>
+              <th>Ferme d'origine</th>
+              <th>Essence + durée</th>
+              <th>Date d'achat</th>
+              <th>Prix payé</th>
+              <th>Certificat</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(dashboard?.credits || []).length === 0 ? (
+              <tr><td colSpan="6">Aucun crédit acheté.</td></tr>
+            ) : dashboard.credits.map((credit) => (
+              <tr key={credit.credit_id}>
+                <td>{credit.serial_number}</td>
+                <td>{credit.farm_name}</td>
+                <td>{speciesLabel(credit.species)} · {credit.project_duration_years} ans</td>
+                <td>{formatDate(credit.purchased_at)}</td>
+                <td>{Number(credit.price_paid_eur).toFixed(2)} €</td>
+                <td><button type="button" disabled={loading} onClick={() => onCertificate(credit.credit_id)} style={styles.tinyButton}>Télécharger certificat</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </section>
   );
+}
+
+function PriceModal({ listing, loading, onClose, onSave }) {
+  const [price, setPrice] = useState(Number(listing.price_per_credit_eur).toFixed(2));
+  return (
+    <div style={styles.modalBackdrop}>
+      <section style={styles.modalCard}>
+        <h2 style={styles.panelTitle}>Modifier le prix</h2>
+        <p style={styles.compactText}>{listing.name}</p>
+        <Field label="Prix par crédit (€)">
+          <input type="number" min="0" step="0.1" value={price} onChange={(event) => setPrice(event.target.value)} style={styles.input} />
+        </Field>
+        <div style={styles.modalActions}>
+          <button type="button" onClick={onClose} style={secondaryButtonStyle(false)}>Annuler</button>
+          <button type="button" disabled={loading} onClick={() => onSave(listing, price)} style={primaryButtonStyle(loading)}>Enregistrer</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MapFocus({ geometry }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!geometry?.coordinates?.[0]?.length) return;
+    const bounds = geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
+    map.fitBounds(bounds, { padding: [36, 36] });
+  }, [geometry, map]);
+  return null;
 }
 
 function Field({ label, children }) {
@@ -678,6 +1041,32 @@ function Badge({ label, value }) {
   );
 }
 
+function Toast({ children }) {
+  return <p style={styles.statusText}>{children}</p>;
+}
+
+function useApi(token, onLogout) {
+  return useCallback(async (path, options = {}) => {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+    });
+    const data = await parseJson(response);
+    if (response.status === 401) {
+      onLogout();
+      throw new Error("Session expirée. Merci de vous reconnecter.");
+    }
+    if (!response.ok) {
+      throw new Error(extractError(data, "Requête impossible."));
+    }
+    return data;
+  }, [onLogout, token]);
+}
+
 function readStoredUser() {
   try {
     const raw = localStorage.getItem("arbo_user");
@@ -690,6 +1079,14 @@ function readStoredUser() {
 async function parseJson(response) {
   const text = await response.text();
   if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function safeJson(text) {
   try {
     return JSON.parse(text);
   } catch {
@@ -726,15 +1123,22 @@ function polylineToMultiLineString(geometry) {
   return { type: "MultiLineString", coordinates: [geometry.coordinates] };
 }
 
-function labelRole(role) {
-  if (role === "farmer") return "Agriculteur";
-  if (role === "buyer") return "Acheteur RSE";
-  return "Administrateur";
-}
-
 function speciesLabel(species) {
   const labels = { chene: "Chêne", noyer: "Noyer", peuplier: "Peuplier", alisier: "Alisier" };
-  return labels[species] || species;
+  return labels[species] || species || "N/A";
+}
+
+function formatDate(value) {
+  return value ? new Date(value).toLocaleDateString("fr-FR") : "N/A";
+}
+
+function formatGps(credit) {
+  if (!credit.centroid_lat || !credit.centroid_lng) return "N/A";
+  return `${Number(credit.centroid_lat).toFixed(4)}, ${Number(credit.centroid_lng).toFixed(4)}`;
+}
+
+function defaultFilters() {
+  return { species: "all", region: "", priceMin: "", priceMax: "", durationMin: "", durationMax: "" };
 }
 
 function interpretShade(value) {
@@ -758,6 +1162,14 @@ function tabStyle(active) {
     color: active ? COLORS.cream : COLORS.forest,
     fontWeight: 800,
     cursor: "pointer",
+  };
+}
+
+function topTabStyle(active) {
+  return {
+    ...tabStyle(active),
+    border: `1px solid ${active ? COLORS.forest : COLORS.border}`,
+    background: active ? COLORS.forest : "white",
   };
 }
 
@@ -798,33 +1210,29 @@ const styles = {
     padding: 32,
     fontFamily: "Inter, system-ui, sans-serif",
   },
-  authCard: {
-    width: "100%",
-    maxWidth: 460,
-    background: COLORS.cream,
-    borderRadius: 28,
-    padding: 36,
-    boxShadow: "0 28px 80px rgba(0, 0, 0, 0.28)",
-  },
+  authCard: { width: "100%", maxWidth: 460, background: COLORS.cream, borderRadius: 28, padding: 36, boxShadow: "0 28px 80px rgba(0, 0, 0, 0.28)" },
   logoKicker: { margin: "0 0 10px", color: "#5C7C38", fontWeight: 900, letterSpacing: "0.18em" },
   authTitle: { margin: 0, fontSize: 34, lineHeight: 1.05 },
   authSubtitle: { margin: "12px 0 0", color: COLORS.muted },
   authTabs: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, background: "rgba(15,61,36,0.08)", borderRadius: 16, padding: 6, marginBottom: 24 },
   input: { width: "100%", border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, outline: "none", boxSizing: "border-box", background: "white" },
   field: { display: "grid", gap: 7, fontWeight: 800, color: COLORS.text, fontSize: 13 },
-  errorText: { margin: "12px 0 0", color: COLORS.danger, fontWeight: 800 },
-  statusText: { margin: 0, color: COLORS.forest, background: COLORS.mint, borderRadius: 14, padding: 12, fontWeight: 800 },
+  errorText: { margin: "12px 0", color: COLORS.danger, fontWeight: 800 },
+  statusText: { margin: "0 0 14px", color: COLORS.forest, background: COLORS.mint, borderRadius: 14, padding: 12, fontWeight: 800 },
   appShell: { minHeight: "100vh", background: COLORS.cream, color: COLORS.text, fontFamily: "Inter, system-ui, sans-serif", padding: 20 },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18, marginBottom: 20, background: COLORS.forest, color: COLORS.cream, borderRadius: 24, padding: "18px 22px" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18, marginBottom: 14, background: COLORS.forest, color: COLORS.cream, borderRadius: 24, padding: "18px 22px" },
   headerKicker: { margin: 0, letterSpacing: "0.2em", fontWeight: 900, color: COLORS.emerald },
   headerTitle: { margin: "4px 0 0", fontSize: 24 },
   userPill: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" },
+  roleBadge: { background: COLORS.mint, color: COLORS.forest, borderRadius: 999, padding: "7px 10px" },
   logoutButton: { border: "1px solid rgba(250,249,246,0.35)", background: "transparent", color: COLORS.cream, borderRadius: 999, padding: "9px 12px", cursor: "pointer", fontWeight: 800 },
+  topTabs: { display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 },
   dashboardGrid: { display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(360px, 1fr)", gap: 20, alignItems: "start" },
+  marketplaceGrid: { display: "grid", gridTemplateColumns: "minmax(420px, 1.25fr) minmax(420px, 1fr)", gap: 20, alignItems: "start" },
   mapCard: { background: "white", border: `1px solid ${COLORS.border}`, borderRadius: 24, padding: 16, boxShadow: "0 16px 42px rgba(15,61,36,0.08)" },
   map: { width: "100%", height: "70vh", minHeight: 560, borderRadius: 18, overflow: "hidden" },
+  marketMap: { width: "100%", height: "72vh", minHeight: 560, borderRadius: 18, overflow: "hidden", marginTop: 14 },
   sidePanel: { display: "grid", gap: 14 },
-  buyerPanel: { maxWidth: 920, margin: "0 auto", display: "grid", gap: 14, width: "100%" },
   panelCard: { background: "white", border: `1px solid ${COLORS.border}`, borderRadius: 22, padding: 18, boxShadow: "0 14px 36px rgba(15,61,36,0.07)" },
   sectionHeader: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12 },
   sectionHeaderCompact: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12 },
@@ -832,14 +1240,18 @@ const styles = {
   sectionSubtitle: { margin: "5px 0 0", color: COLORS.muted },
   panelTitle: { margin: 0, fontSize: 19 },
   formGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 },
+  filterGrid: { display: "grid", gridTemplateColumns: "repeat(3, minmax(130px, 1fr))", gap: 12, alignItems: "end" },
   metaGrid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 12 },
   badgeBox: { background: COLORS.sand, borderRadius: 14, padding: 10, display: "grid", gap: 3, fontSize: 12 },
   actionStack: { display: "grid", gridTemplateColumns: "1fr", gap: 10 },
   statGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 },
+  threeStatGrid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 12, marginBottom: 18 },
+  fourStatGrid: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 12 },
   statCard: { background: COLORS.sand, borderRadius: 16, padding: 12, display: "grid", gap: 5 },
   statLabel: { fontSize: 12, color: COLORS.muted, fontWeight: 800 },
   statValue: { fontSize: 21, color: COLORS.forest },
   successBadge: { background: COLORS.mint, color: COLORS.forest, borderRadius: 999, padding: "5px 8px", fontSize: 12, fontWeight: 900 },
+  warningBadge: { background: "#FFF3D6", color: COLORS.warning, borderRadius: 999, padding: "5px 8px", fontSize: 12, fontWeight: 900 },
   dangerBadge: { background: "#FCE8E8", color: COLORS.danger, borderRadius: 999, padding: "5px 8px", fontSize: 12, fontWeight: 900 },
   countBadge: { background: COLORS.forest, color: COLORS.cream, borderRadius: 999, padding: "5px 9px", fontSize: 12, fontWeight: 900 },
   messageBox: { margin: "12px 0 0", background: "rgba(15,61,36,0.06)", borderRadius: 14, padding: 12, color: COLORS.text, lineHeight: 1.45 },
@@ -847,11 +1259,18 @@ const styles = {
   transactionBreakdown: { marginTop: 12, display: "grid", gap: 10, background: COLORS.cream, border: `1px solid ${COLORS.border}`, borderRadius: 16, padding: 14 },
   transactionGross: { color: COLORS.text, fontWeight: 800 },
   transactionPayout: { color: COLORS.emerald, fontWeight: 900 },
-  transactionFee: { color: COLORS.muted, fontWeight: 800 },
   transactionRef: { color: COLORS.forest, fontWeight: 800 },
   compactText: { margin: 0, color: COLORS.muted, fontSize: 13, lineHeight: 1.4 },
   creditCard: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: 12 },
   smallButton: { border: 0, background: COLORS.forest, color: COLORS.cream, borderRadius: 999, padding: "9px 12px", fontWeight: 900, cursor: "pointer" },
+  tinyButton: { border: `1px solid ${COLORS.border}`, background: "white", color: COLORS.forest, borderRadius: 999, padding: "7px 10px", fontWeight: 900, cursor: "pointer", fontSize: 12 },
+  inlineActions: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" },
+  tableShell: { overflowX: "auto", marginTop: 14 },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 14 },
+  chartBox: { height: 260, marginTop: 18, background: COLORS.sand, borderRadius: 18, padding: 12 },
+  modalBackdrop: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", zIndex: 1000 },
+  modalCard: { width: "min(420px, calc(100vw - 36px))", background: "white", borderRadius: 22, padding: 22, boxShadow: "0 24px 80px rgba(0,0,0,.25)", display: "grid", gap: 14 },
+  modalActions: { display: "flex", gap: 10, justifyContent: "flex-end" },
   footer: { marginTop: 18, textAlign: "center", color: COLORS.muted, fontSize: 13 },
 };
 
