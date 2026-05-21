@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import shape as shapely_shape
 from shapely.ops import transform as shapely_transform
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from pyproj import Transformer
 
 from . import engine, models, schemas, solar
@@ -653,12 +653,53 @@ def list_available_credits(
 ) -> List[schemas.CarbonCreditOut]:
     credits = (
         db.query(models.CarbonCredit)
+        .options(
+            joinedload(models.CarbonCredit.project)
+            .joinedload(models.CarbonProject.farm),
+            joinedload(models.CarbonCredit.project)
+            .joinedload(models.CarbonProject.plot),
+        )
         .filter(models.CarbonCredit.status == "available")
         .order_by(models.CarbonCredit.created_at.desc())
         .limit(500)
         .all()
     )
-    return [schemas.CarbonCreditOut.model_validate(c) for c in credits]
+    return [_credit_to_enriched_out(c) for c in credits]
+
+
+def _credit_to_enriched_out(credit: models.CarbonCredit) -> schemas.CarbonCreditOut:
+    project = credit.project
+    farm = project.farm if project else None
+    plot = project.plot if project else None
+
+    centroid_lat = None
+    centroid_lng = None
+    if plot and plot.geometry:
+        centroid = to_shape(plot.geometry).centroid
+        centroid_lat = round(centroid.y, 6)
+        centroid_lng = round(centroid.x, 6)
+
+    dominant_species = None
+    if project and project.metadata_json:
+        dominant_species = project.metadata_json.get("dominant_species")
+
+    return schemas.CarbonCreditOut(
+        id=credit.id,
+        project_id=credit.project_id,
+        serial_number=credit.serial_number,
+        vintage_year=credit.vintage_year,
+        status=credit.status,
+        price_eur=credit.price_eur,
+        owner_id=credit.owner_id,
+        created_at=credit.created_at,
+        farm_name=farm.name if farm else None,
+        farm_region=farm.region if farm else None,
+        project_name=project.name if project else None,
+        dominant_species=dominant_species,
+        project_duration_years=project.project_duration_years if project else None,
+        centroid_lat=centroid_lat,
+        centroid_lng=centroid_lng,
+    )
 
 
 @marketplace_router.post(

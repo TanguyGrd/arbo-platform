@@ -233,6 +233,13 @@ class CarbonCreditOut(ORMBase):
     price_eur: Decimal
     owner_id: Optional[UUID]
     created_at: datetime
+    farm_name: Optional[str] = None
+    farm_region: Optional[str] = None
+    project_name: Optional[str] = None
+    dominant_species: Optional[str] = None
+    project_duration_years: Optional[int] = None
+    centroid_lat: Optional[float] = None
+    centroid_lng: Optional[float] = None
 
 
 class CreditPurchaseRequest(BaseModel):
