@@ -20,8 +20,8 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-user_role = sa.Enum("farmer", "buyer", "admin", name="user_role")
-kyc_status = sa.Enum("pending", "verified", "rejected", name="kyc_status")
+user_role = sa.Enum("farmer", "buyer", "admin", name="user_role", create_type=False)
+kyc_status = sa.Enum("pending", "verified", "rejected", name="kyc_status", create_type=False)
 project_status = sa.Enum(
     "draft",
     "validated",
@@ -29,19 +29,14 @@ project_status = sa.Enum(
     "partially_sold",
     "sold_out",
     name="project_status",
+    create_type=False,
 )
-credit_status = sa.Enum("available", "reserved", "sold", "retired", name="credit_status")
-transaction_status = sa.Enum("pending", "completed", "refunded", name="transaction_status")
+credit_status = sa.Enum("available", "reserved", "sold", "retired", name="credit_status", create_type=False)
+transaction_status = sa.Enum("pending", "completed", "refunded", name="transaction_status", create_type=False)
 
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-
-    user_role.create(op.get_bind(), checkfirst=True)
-    kyc_status.create(op.get_bind(), checkfirst=True)
-    project_status.create(op.get_bind(), checkfirst=True)
-    credit_status.create(op.get_bind(), checkfirst=True)
-    transaction_status.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "users",
