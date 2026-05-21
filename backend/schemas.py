@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class GeoJSONMultiLineString(BaseModel):
 # ---------------------------------------------------------------------------
 
 class UserCreate(BaseModel):
-    email: EmailStr
+    email: str = Field(..., min_length=3, max_length=255)
     password: str = Field(..., min_length=8)
     full_name: Optional[str] = None
     role: Literal["farmer", "buyer", "admin"] = "farmer"
@@ -81,7 +81,7 @@ class UserCreate(BaseModel):
 
 class UserOut(ORMBase):
     id: UUID
-    email: EmailStr
+    email: str
     full_name: Optional[str]
     role: str
     kyc_status: str
@@ -275,7 +275,7 @@ class FarmerProjectOut(BaseModel):
 class FarmerTransactionOut(BaseModel):
     date: datetime
     credit_serial: str
-    buyer_email: Optional[EmailStr]
+    buyer_email: Optional[str]
     amount_eur: Decimal
     farmer_payout_eur: Decimal
 
@@ -353,7 +353,7 @@ class SolarSimulationOut(ORMBase):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
