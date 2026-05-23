@@ -34,8 +34,11 @@ body {
 }
 
 .landing-mobile-menu {
-  position: relative;
-  z-index: 70;
+  background: #faf9f6;
+  inset-inline: 0;
+  position: fixed;
+  top: 80px;
+  z-index: 80;
 }
 
 .landing-nav-link {
