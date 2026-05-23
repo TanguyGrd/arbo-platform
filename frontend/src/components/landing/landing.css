@@ -26,6 +26,10 @@ body {
 }
 
 .landing-header {
+  inset-inline: 0;
+  position: fixed;
+  top: 0;
+  z-index: 40;
   box-shadow: 0 12px 40px rgba(15, 61, 36, 0.08);
 }
 
@@ -57,6 +61,17 @@ body {
   background-image:
     linear-gradient(90deg, rgba(15, 61, 36, 0.94) 0%, rgba(15, 61, 36, 0.82) 48%, rgba(15, 61, 36, 0.34) 100%),
     url("https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=2200&q=85");
+}
+
+.landing-tab-bar {
+  inset-inline: 0;
+  position: fixed;
+  top: 80px;
+  z-index: 30;
+}
+
+.landing-content {
+  scroll-margin-top: 170px;
 }
 
 .landing-tabs {

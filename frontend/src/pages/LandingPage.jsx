@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import FaqAccordion from "../components/landing/FaqAccordion.jsx";
@@ -35,10 +35,16 @@ const processSteps = [
 function LandingPage() {
   const [activeTab, setActiveTab] = useState("farmers");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const contentRef = useRef(null);
 
-  function showTab(tabId) {
+  function showTab(tabId, scrollToContent = false) {
     setActiveTab(tabId);
     setMobileMenuOpen(false);
+    if (scrollToContent) {
+      window.requestAnimationFrame(() => {
+        contentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
   }
 
   return (
@@ -50,9 +56,9 @@ function LandingPage() {
           </Link>
 
           <div className="hidden items-center gap-8 text-sm font-extrabold text-[#0F3D24] lg:flex">
-            <button type="button" onClick={() => showTab("process")} className="landing-nav-link">Comment ça marche</button>
-            <button type="button" onClick={() => showTab("companies")} className="landing-nav-link">Marketplace</button>
-            <button type="button" onClick={() => showTab("faq")} className="landing-nav-link">FAQ</button>
+            <button type="button" onClick={() => showTab("process", true)} className="landing-nav-link">Comment ça marche</button>
+            <button type="button" onClick={() => showTab("companies", true)} className="landing-nav-link">Marketplace</button>
+            <button type="button" onClick={() => showTab("faq", true)} className="landing-nav-link">FAQ</button>
           </div>
 
           <div className="hidden items-center gap-3 lg:flex">
@@ -78,9 +84,9 @@ function LandingPage() {
         {mobileMenuOpen && (
           <div className="border-t border-[#0F3D24]/10 bg-[#FAF9F6] px-5 py-4 shadow-[0_24px_60px_rgba(15,61,36,0.12)] lg:hidden">
             <div className="mx-auto grid max-w-7xl gap-3">
-              <button type="button" onClick={() => showTab("process")} className="landing-mobile-link">Comment ça marche</button>
-              <button type="button" onClick={() => showTab("companies")} className="landing-mobile-link">Marketplace</button>
-              <button type="button" onClick={() => showTab("faq")} className="landing-mobile-link">FAQ</button>
+              <button type="button" onClick={() => showTab("process", true)} className="landing-mobile-link">Comment ça marche</button>
+              <button type="button" onClick={() => showTab("companies", true)} className="landing-mobile-link">Marketplace</button>
+              <button type="button" onClick={() => showTab("faq", true)} className="landing-mobile-link">FAQ</button>
               <div className="grid gap-3 pt-2 sm:grid-cols-2">
                 <Link to="/app" className="rounded-full border border-[#0F3D24]/25 px-5 py-3 text-center font-extrabold text-[#0F3D24]">Se connecter</Link>
                 <Link to="/app?role=farmer" className="rounded-full bg-[#0F3D24] px-5 py-3 text-center font-extrabold text-[#FAF9F6]">Commencer</Link>
@@ -148,7 +154,7 @@ function LandingPage() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-7xl px-5 py-14 md:px-8 md:py-20">
+        <section ref={contentRef} className="landing-content mx-auto max-w-7xl px-5 py-14 md:px-8 md:py-20">
           <div className="landing-panel rounded-[2rem] border border-[#0F3D24]/10 bg-white p-5 shadow-[0_28px_80px_rgba(15,61,36,0.08)] md:p-8 lg:p-10">
             {activeTab === "farmers" && <FarmersTab />}
             {activeTab === "companies" && <CompaniesTab />}
