@@ -619,9 +619,27 @@ function Marketplace({ credits, canPurchase, onPurchase, loading, isDemoBuyer })
         <div style={{ display: "grid", gap: 10 }}>
           {credits.slice(0, 20).map((credit) => (
             <article key={credit.id} style={styles.creditCard}>
-              <div>
-                <strong>{credit.serial_number}</strong>
-                <p style={styles.compactText}>Vintage {credit.vintage_year} · {Number(credit.price_eur).toFixed(2)} € · {credit.status}</p>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <strong style={{ fontSize: 13 }}>{credit.serial_number}</strong>
+                  <span style={styles.priceBadge}>
+                    {Number(credit.price_eur).toFixed(2)} €
+                    {credit.dominant_species && credit.project_duration_years
+                      ? ` | ${speciesLabel(credit.dominant_species)} + ${credit.project_duration_years} ans`
+                      : ""}
+                  </span>
+                </div>
+                {credit.farm_name && (
+                  <p style={{ ...styles.compactText, marginTop: 4, fontWeight: 700, color: COLORS.forest }}>
+                    🌳 {credit.farm_name}{credit.farm_region ? ` — ${credit.farm_region}` : ""}
+                  </p>
+                )}
+                <p style={{ ...styles.compactText, marginTop: 2 }}>
+                  Vintage {credit.vintage_year} · {credit.status}
+                  {credit.centroid_lat != null && credit.centroid_lng != null
+                    ? ` · GPS ${credit.centroid_lat.toFixed(4)}, ${credit.centroid_lng.toFixed(4)}`
+                    : ""}
+                </p>
               </div>
               {canPurchase && credit.status === "available" && (
                 <button type="button" disabled={loading} onClick={() => onPurchase(credit)} style={styles.smallButton}>
@@ -851,6 +869,7 @@ const styles = {
   transactionRef: { color: COLORS.forest, fontWeight: 800 },
   compactText: { margin: 0, color: COLORS.muted, fontSize: 13, lineHeight: 1.4 },
   creditCard: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: 12 },
+  priceBadge: { background: COLORS.mint, color: COLORS.forest, borderRadius: 999, padding: "3px 9px", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap" },
   smallButton: { border: 0, background: COLORS.forest, color: COLORS.cream, borderRadius: 999, padding: "9px 12px", fontWeight: 900, cursor: "pointer" },
   footer: { marginTop: 18, textAlign: "center", color: COLORS.muted, fontSize: 13 },
 };
