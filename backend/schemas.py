@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class GeoJSONMultiLineString(BaseModel):
 # ---------------------------------------------------------------------------
 
 class UserCreate(BaseModel):
-    email: EmailStr
+    email: str = Field(..., min_length=3, max_length=255)
     password: str = Field(..., min_length=8)
     full_name: Optional[str] = None
     role: Literal["farmer", "buyer", "admin"] = "farmer"
@@ -81,7 +81,7 @@ class UserCreate(BaseModel):
 
 class UserOut(ORMBase):
     id: UUID
-    email: EmailStr
+    email: str
     full_name: Optional[str]
     role: str
     kyc_status: str
@@ -224,6 +224,10 @@ class CarbonProjectOut(ORMBase):
     created_at: datetime
 
 
+class ProjectPriceUpdate(BaseModel):
+    price_per_credit_eur: float = Field(..., gt=0)
+
+
 class CarbonCreditOut(ORMBase):
     id: UUID
     project_id: UUID
@@ -240,6 +244,80 @@ class CarbonCreditOut(ORMBase):
     project_duration_years: Optional[int] = None
     centroid_lat: Optional[float] = None
     centroid_lng: Optional[float] = None
+
+
+class MarketplaceCreditOut(CarbonCreditOut):
+    project_name: str
+    farm_name: str
+    farm_region: Optional[str]
+    plot_name: Optional[str]
+    plot_geometry: Optional[Dict[str, Any]]
+    centroid_lat: Optional[float]
+    centroid_lng: Optional[float]
+    species: Optional[str]
+    project_duration_years: int
+
+
+class FarmerProjectOut(BaseModel):
+    id: UUID
+    name: str
+    farm_name: str
+    farm_region: Optional[str]
+    plot_id: Optional[UUID]
+    plot_name: Optional[str]
+    plot_geometry: Optional[Dict[str, Any]]
+    status: str
+    total_credits: int
+    sold_credits: int
+    available_credits: int
+    withdrawn_credits: int
+    price_per_credit_eur: Decimal
+    revenue_generated_eur: Decimal
+    certified_at: datetime
+    species: Optional[str]
+    project_duration_years: int
+    estimated_tco2: Decimal
+
+
+class FarmerTransactionOut(BaseModel):
+    date: datetime
+    credit_serial: str
+    buyer_email: Optional[str]
+    amount_eur: Decimal
+    farmer_payout_eur: Decimal
+
+
+class MonthlySalesOut(BaseModel):
+    month: str
+    sales: int
+    gross_eur: Decimal
+    payout_eur: Decimal
+
+
+class FarmerDashboardOut(BaseModel):
+    total_revenue_eur: Decimal
+    credits_sold: int
+    credits_available: int
+    total_tco2: Decimal
+    recent_transactions: List[FarmerTransactionOut]
+    monthly_sales: List[MonthlySalesOut]
+
+
+class BuyerOwnedCreditOut(BaseModel):
+    credit_id: UUID
+    serial_number: str
+    farm_name: str
+    species: Optional[str]
+    project_duration_years: int
+    purchased_at: datetime
+    price_paid_eur: Decimal
+
+
+class BuyerDashboardOut(BaseModel):
+    total_tco2_compensated: Decimal
+    credits_owned: int
+    total_spent_eur: Decimal
+    credits: List[BuyerOwnedCreditOut]
 
 
 class CreditPurchaseRequest(BaseModel):
@@ -282,7 +360,7 @@ class SolarSimulationOut(ORMBase):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 

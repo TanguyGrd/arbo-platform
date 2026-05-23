@@ -199,7 +199,7 @@ class CarbonProject(Base):
 
     Lifecycle
     ---------
-    draft -> validated -> listed_on_marketplace -> partially_sold -> sold_out
+    draft -> validated -> listed_on_marketplace -> partially_sold -> sold_out -> withdrawn
 
     The estimated tCO2 is calculated from the plot's tree lines via
     engine.estimate_carbon_sequestration. Each unit becomes a
@@ -233,6 +233,7 @@ class CarbonProject(Base):
             "listed_on_marketplace",
             "partially_sold",
             "sold_out",
+            "withdrawn",
             name="project_status",
         ),
         nullable=False,
@@ -275,7 +276,7 @@ class CarbonCredit(Base):
     serial_number = Column(String(64), unique=True, nullable=False, index=True)
     vintage_year = Column(Integer, nullable=False)
     status = Column(
-        SAEnum("available", "reserved", "sold", "retired", name="credit_status"),
+        SAEnum("available", "reserved", "sold", "retired", "withdrawn", name="credit_status"),
         nullable=False,
         default="available",
     )

@@ -11,10 +11,13 @@ import hashlib
 import json
 import secrets
 import uuid
+from collections import defaultdict
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import shape as shapely_shape
 from shapely.ops import transform as shapely_transform
@@ -100,6 +103,100 @@ def _require_owned_plot(
     _require(plot, "Plot")
     _require_owned_farm(plot.farm_id, current_user, db)
     return plot
+
+
+def _project_species(project: models.CarbonProject) -> str | None:
+    metadata = project.metadata_json or {}
+    return metadata.get("dominant_species")
+
+
+def _plot_geojson_and_centroid(plot: models.Plot | None) -> tuple[dict | None, float | None, float | None]:
+    if plot is None:
+        return None, None, None
+    geojson = _geometry_to_geojson(plot.geometry)
+    centroid = shapely_shape(geojson).centroid
+    return geojson, float(centroid.y), float(centroid.x)
+
+
+def _project_credit_counts(project: models.CarbonProject) -> dict[str, int]:
+    counts = {"total": 0, "sold": 0, "available": 0, "withdrawn": 0}
+    for credit in project.credits:
+        counts["total"] += 1
+        if credit.status in ("sold", "retired"):
+            counts["sold"] += 1
+        elif credit.status == "available":
+            counts["available"] += 1
+        elif credit.status == "withdrawn":
+            counts["withdrawn"] += 1
+    return counts
+
+
+def _display_project_status(project: models.CarbonProject, counts: dict[str, int]) -> str:
+    if project.status == "draft":
+        return "Brouillon"
+    if counts["total"] > 0 and counts["sold"] == counts["total"]:
+        return "Tout vendu"
+    if project.status == "withdrawn" or counts["withdrawn"] > 0 and counts["available"] == 0:
+        return "Retiré"
+    if counts["sold"] > 0:
+        return "Partiellement vendu"
+    if counts["available"] > 0:
+        return "Listé"
+    return "Brouillon"
+
+
+def _project_to_farmer_out(project: models.CarbonProject) -> schemas.FarmerProjectOut:
+    counts = _project_credit_counts(project)
+    plot_geojson, _lat, _lng = _plot_geojson_and_centroid(project.plot)
+    revenue = sum(
+        (tx.farmer_payout_eur or Decimal("0.00"))
+        for credit in project.credits
+        for tx in ([credit.transaction] if credit.transaction else [])
+    )
+    return schemas.FarmerProjectOut(
+        id=project.id,
+        name=project.name,
+        farm_name=project.farm.name,
+        farm_region=project.farm.region,
+        plot_id=project.plot_id,
+        plot_name=project.plot.name if project.plot else None,
+        plot_geometry=plot_geojson,
+        status=_display_project_status(project, counts),
+        total_credits=counts["total"],
+        sold_credits=counts["sold"],
+        available_credits=counts["available"],
+        withdrawn_credits=counts["withdrawn"],
+        price_per_credit_eur=project.price_per_credit_eur,
+        revenue_generated_eur=revenue,
+        certified_at=project.created_at,
+        species=_project_species(project),
+        project_duration_years=project.project_duration_years,
+        estimated_tco2=project.estimated_tco2,
+    )
+
+
+def _marketplace_credit_to_out(credit: models.CarbonCredit) -> schemas.MarketplaceCreditOut:
+    project = credit.project
+    plot_geojson, lat, lng = _plot_geojson_and_centroid(project.plot)
+    return schemas.MarketplaceCreditOut(
+        id=credit.id,
+        project_id=credit.project_id,
+        serial_number=credit.serial_number,
+        vintage_year=credit.vintage_year,
+        status=credit.status,
+        price_eur=credit.price_eur,
+        owner_id=credit.owner_id,
+        created_at=credit.created_at,
+        project_name=project.name,
+        farm_name=project.farm.name,
+        farm_region=project.farm.region,
+        plot_name=project.plot.name if project.plot else None,
+        plot_geometry=plot_geojson,
+        centroid_lat=lat,
+        centroid_lng=lng,
+        species=_project_species(project),
+        project_duration_years=project.project_duration_years,
+    )
 
 
 def _tree_positions_from_lines(
@@ -626,6 +723,75 @@ def list_on_marketplace(
     return schemas.CarbonProjectOut.model_validate(project)
 
 
+@projects_router.patch("/{project_id}", response_model=schemas.CarbonProjectOut)
+def update_project(
+    project_id: uuid.UUID,
+    payload: schemas.ProjectPriceUpdate,
+    current_user: models.User = Depends(require_role("farmer", "admin")),
+    db: Session = Depends(get_db),
+) -> schemas.CarbonProjectOut:
+    project = db.get(models.CarbonProject, project_id)
+    _require(project, "Project")
+    _require_owned_farm(project.farm_id, current_user, db)
+
+    new_price = _to_decimal(payload.price_per_credit_eur)
+    project.price_per_credit_eur = new_price
+    for credit in project.credits:
+        if credit.status in ("available", "withdrawn"):
+            credit.price_eur = new_price
+
+    db.commit()
+    db.refresh(project)
+    return schemas.CarbonProjectOut.model_validate(project)
+
+
+@projects_router.post("/{project_id}/withdraw", response_model=schemas.FarmerProjectOut)
+def withdraw_project(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(require_role("farmer", "admin")),
+    db: Session = Depends(get_db),
+) -> schemas.FarmerProjectOut:
+    project = db.get(models.CarbonProject, project_id)
+    _require(project, "Project")
+    _require_owned_farm(project.farm_id, current_user, db)
+
+    available = [credit for credit in project.credits if credit.status == "available"]
+    if not available:
+        raise HTTPException(status_code=400, detail="No available credits to withdraw.")
+    for credit in available:
+        credit.status = "withdrawn"
+    project.status = "withdrawn"
+
+    db.commit()
+    db.refresh(project)
+    return _project_to_farmer_out(project)
+
+
+@projects_router.post("/{project_id}/relist", response_model=schemas.FarmerProjectOut)
+def relist_project(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(require_role("farmer", "admin")),
+    db: Session = Depends(get_db),
+) -> schemas.FarmerProjectOut:
+    project = db.get(models.CarbonProject, project_id)
+    _require(project, "Project")
+    _require_owned_farm(project.farm_id, current_user, db)
+
+    withdrawn = [credit for credit in project.credits if credit.status == "withdrawn"]
+    if not withdrawn:
+        raise HTTPException(status_code=400, detail="No withdrawn credits to relist.")
+    for credit in withdrawn:
+        credit.status = "available"
+        credit.price_eur = project.price_per_credit_eur
+
+    counts = _project_credit_counts(project)
+    project.status = "partially_sold" if counts["sold"] > 0 else "listed_on_marketplace"
+
+    db.commit()
+    db.refresh(project)
+    return _project_to_farmer_out(project)
+
+
 @projects_router.get("/{project_id}", response_model=schemas.CarbonProjectOut)
 def get_project(
     project_id: uuid.UUID,
@@ -640,17 +806,215 @@ def get_project(
 
 
 # ---------------------------------------------------------------------------
+# Farmer workspace
+# ---------------------------------------------------------------------------
+farmer_router = APIRouter(prefix="/farmer", tags=["farmer"])
+
+
+@farmer_router.get("/projects", response_model=List[schemas.FarmerProjectOut])
+def list_farmer_projects(
+    current_user: models.User = Depends(require_role("farmer", "admin")),
+    db: Session = Depends(get_db),
+) -> List[schemas.FarmerProjectOut]:
+    query = db.query(models.CarbonProject).join(models.Farm)
+    if current_user.role != "admin":
+        query = query.filter(models.Farm.owner_id == current_user.id)
+    projects = query.order_by(models.CarbonProject.created_at.desc()).all()
+    return [_project_to_farmer_out(project) for project in projects]
+
+
+@farmer_router.get("/dashboard", response_model=schemas.FarmerDashboardOut)
+def get_farmer_dashboard(
+    current_user: models.User = Depends(require_role("farmer", "admin")),
+    db: Session = Depends(get_db),
+) -> schemas.FarmerDashboardOut:
+    projects_query = db.query(models.CarbonProject).join(models.Farm)
+    if current_user.role != "admin":
+        projects_query = projects_query.filter(models.Farm.owner_id == current_user.id)
+    projects = projects_query.all()
+    project_ids = [project.id for project in projects]
+
+    credits_available = 0
+    total_tco2 = Decimal("0.0000")
+    for project in projects:
+        counts = _project_credit_counts(project)
+        credits_available += counts["available"]
+        total_tco2 += project.estimated_tco2 or Decimal("0.0000")
+
+    if project_ids:
+        transactions = (
+            db.query(models.Transaction)
+            .join(models.CarbonCredit, models.Transaction.credit_id == models.CarbonCredit.id)
+            .filter(models.CarbonCredit.project_id.in_(project_ids))
+            .order_by(models.Transaction.created_at.desc())
+            .all()
+        )
+    else:
+        transactions = []
+
+    total_revenue = sum((tx.farmer_payout_eur or Decimal("0.00")) for tx in transactions)
+    recent = []
+    for tx in transactions[:10]:
+        buyer = db.get(models.User, tx.buyer_id) if tx.buyer_id else None
+        recent.append(
+            schemas.FarmerTransactionOut(
+                date=tx.created_at,
+                credit_serial=tx.credit.serial_number,
+                buyer_email=buyer.email if buyer else None,
+                amount_eur=tx.amount_eur,
+                farmer_payout_eur=tx.farmer_payout_eur,
+            )
+        )
+
+    monthly = defaultdict(lambda: {"sales": 0, "gross": Decimal("0.00"), "payout": Decimal("0.00")})
+    now = datetime.utcnow()
+    month_keys = []
+    for offset in range(5, -1, -1):
+        year = now.year
+        month = now.month - offset
+        while month <= 0:
+            month += 12
+            year -= 1
+        key = f"{year}-{month:02d}"
+        month_keys.append(key)
+        monthly[key]
+    for tx in transactions:
+        key = tx.created_at.strftime("%Y-%m")
+        if key in monthly:
+            monthly[key]["sales"] += 1
+            monthly[key]["gross"] += tx.amount_eur or Decimal("0.00")
+            monthly[key]["payout"] += tx.farmer_payout_eur or Decimal("0.00")
+
+    return schemas.FarmerDashboardOut(
+        total_revenue_eur=total_revenue,
+        credits_sold=len(transactions),
+        credits_available=credits_available,
+        total_tco2=total_tco2,
+        recent_transactions=recent,
+        monthly_sales=[
+            schemas.MonthlySalesOut(
+                month=key,
+                sales=monthly[key]["sales"],
+                gross_eur=monthly[key]["gross"],
+                payout_eur=monthly[key]["payout"],
+            )
+            for key in month_keys
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Buyer workspace
+# ---------------------------------------------------------------------------
+buyer_router = APIRouter(prefix="/buyer", tags=["buyer"])
+
+
+@buyer_router.get("/dashboard", response_model=schemas.BuyerDashboardOut)
+def get_buyer_dashboard(
+    current_user: models.User = Depends(require_role("buyer", "admin")),
+    db: Session = Depends(get_db),
+) -> schemas.BuyerDashboardOut:
+    transactions = (
+        db.query(models.Transaction)
+        .filter(models.Transaction.buyer_id == current_user.id)
+        .order_by(models.Transaction.created_at.desc())
+        .all()
+    )
+    owned_credits = []
+    for tx in transactions:
+        credit = tx.credit
+        project = credit.project
+        owned_credits.append(
+            schemas.BuyerOwnedCreditOut(
+                credit_id=credit.id,
+                serial_number=credit.serial_number,
+                farm_name=project.farm.name,
+                species=_project_species(project),
+                project_duration_years=project.project_duration_years,
+                purchased_at=tx.created_at,
+                price_paid_eur=tx.amount_eur,
+            )
+        )
+
+    total_spent = sum((tx.amount_eur or Decimal("0.00")) for tx in transactions)
+    return schemas.BuyerDashboardOut(
+        total_tco2_compensated=Decimal(len(transactions)),
+        credits_owned=len(transactions),
+        total_spent_eur=total_spent,
+        credits=owned_credits,
+    )
+
+
+credits_router = APIRouter(prefix="/credits", tags=["credits"])
+
+
+@credits_router.get("/{credit_id}/certificate", response_class=HTMLResponse)
+def get_credit_certificate(
+    credit_id: uuid.UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    credit = db.get(models.CarbonCredit, credit_id)
+    _require(credit, "Credit")
+    transaction = credit.transaction
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Certificate not available before purchase.")
+    if current_user.role != "admin" and transaction.buyer_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
+
+    project = credit.project
+    buyer = db.get(models.User, transaction.buyer_id) if transaction.buyer_id else None
+    html = f"""
+    <!doctype html>
+    <html lang="fr">
+      <head>
+        <meta charset="utf-8" />
+        <title>Certificat ARBO {credit.serial_number}</title>
+        <style>
+          body {{ font-family: Inter, system-ui, sans-serif; background: #FAF9F6; color: #183B2A; padding: 48px; }}
+          .certificate {{ max-width: 820px; margin: 0 auto; border: 2px solid #0F3D24; border-radius: 24px; padding: 36px; background: white; }}
+          .kicker {{ color: #2ECC71; letter-spacing: .18em; font-weight: 900; }}
+          h1 {{ margin: 0 0 12px; color: #0F3D24; }}
+          dl {{ display: grid; grid-template-columns: 220px 1fr; gap: 12px; margin-top: 28px; }}
+          dt {{ font-weight: 800; color: #627466; }}
+          dd {{ margin: 0; font-weight: 700; }}
+        </style>
+      </head>
+      <body>
+        <main class="certificate">
+          <p class="kicker">ARBO</p>
+          <h1>Certificat de credit carbone</h1>
+          <p>Ce document atteste l'achat d'un credit carbone demonstratif sur la plateforme ARBO.</p>
+          <dl>
+            <dt>Serial number</dt><dd>{credit.serial_number}</dd>
+            <dt>Acheteur</dt><dd>{buyer.email if buyer else "N/A"}</dd>
+            <dt>Ferme d'origine</dt><dd>{project.farm.name}</dd>
+            <dt>Projet</dt><dd>{project.name}</dd>
+            <dt>Essence</dt><dd>{_project_species(project) or "N/A"}</dd>
+            <dt>Duree</dt><dd>{project.project_duration_years} ans</dd>
+            <dt>Date d'achat</dt><dd>{transaction.created_at.strftime("%d/%m/%Y")}</dd>
+            <dt>Prix paye</dt><dd>{transaction.amount_eur} EUR</dd>
+          </dl>
+          <p style="margin-top:32px;color:#627466">MVP de demonstration. Non certifie officiellement Label Bas-Carbone.</p>
+        </main>
+      </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
+
+
+# ---------------------------------------------------------------------------
 # Marketplace
 # ---------------------------------------------------------------------------
 
 marketplace_router = APIRouter(prefix="/marketplace", tags=["marketplace"])
 
 
-@marketplace_router.get("/credits", response_model=List[schemas.CarbonCreditOut])
+@marketplace_router.get("/credits", response_model=List[schemas.MarketplaceCreditOut])
 def list_available_credits(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> List[schemas.CarbonCreditOut]:
+) -> List[schemas.MarketplaceCreditOut]:
     credits = (
         db.query(models.CarbonCredit)
         .options(
@@ -664,42 +1028,7 @@ def list_available_credits(
         .limit(500)
         .all()
     )
-    return [_credit_to_enriched_out(c) for c in credits]
-
-
-def _credit_to_enriched_out(credit: models.CarbonCredit) -> schemas.CarbonCreditOut:
-    project = credit.project
-    farm = project.farm if project else None
-    plot = project.plot if project else None
-
-    centroid_lat = None
-    centroid_lng = None
-    if plot and plot.geometry:
-        centroid = to_shape(plot.geometry).centroid
-        centroid_lat = round(centroid.y, 6)
-        centroid_lng = round(centroid.x, 6)
-
-    dominant_species = None
-    if project and project.metadata_json:
-        dominant_species = project.metadata_json.get("dominant_species")
-
-    return schemas.CarbonCreditOut(
-        id=credit.id,
-        project_id=credit.project_id,
-        serial_number=credit.serial_number,
-        vintage_year=credit.vintage_year,
-        status=credit.status,
-        price_eur=credit.price_eur,
-        owner_id=credit.owner_id,
-        created_at=credit.created_at,
-        farm_name=farm.name if farm else None,
-        farm_region=farm.region if farm else None,
-        project_name=project.name if project else None,
-        dominant_species=dominant_species,
-        project_duration_years=project.project_duration_years if project else None,
-        centroid_lat=centroid_lat,
-        centroid_lng=centroid_lng,
-    )
+    return [_marketplace_credit_to_out(credit) for credit in credits]
 
 
 @marketplace_router.post(
@@ -784,5 +1113,8 @@ def build_api_router() -> APIRouter:
     api.include_router(diagnostics_router)
     api.include_router(solar_router)
     api.include_router(projects_router)
+    api.include_router(farmer_router)
+    api.include_router(buyer_router)
+    api.include_router(credits_router)
     api.include_router(marketplace_router)
     return api
