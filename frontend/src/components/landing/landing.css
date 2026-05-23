@@ -29,8 +29,13 @@ body {
   inset-inline: 0;
   position: fixed;
   top: 0;
-  z-index: 40;
+  z-index: 60;
   box-shadow: 0 12px 40px rgba(15, 61, 36, 0.08);
+}
+
+.landing-mobile-menu {
+  position: relative;
+  z-index: 70;
 }
 
 .landing-nav-link {

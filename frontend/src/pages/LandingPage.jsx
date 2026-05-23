@@ -82,7 +82,7 @@ function LandingPage() {
         </nav>
 
         {mobileMenuOpen && (
-          <div className="border-t border-[#0F3D24]/10 bg-[#FAF9F6] px-5 py-4 shadow-[0_24px_60px_rgba(15,61,36,0.12)] lg:hidden">
+          <div className="landing-mobile-menu border-t border-[#0F3D24]/10 bg-[#FAF9F6] px-5 py-4 shadow-[0_24px_60px_rgba(15,61,36,0.12)] lg:hidden">
             <div className="mx-auto grid max-w-7xl gap-3">
               <button type="button" onClick={() => showTab("process", true)} className="landing-mobile-link">Comment ça marche</button>
               <button type="button" onClick={() => showTab("companies", true)} className="landing-mobile-link">Marketplace</button>
