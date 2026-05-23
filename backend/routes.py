@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import shape as shapely_shape
 from shapely.ops import transform as shapely_transform
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from pyproj import Transformer
 
 from . import engine, models, schemas, solar
@@ -1017,6 +1017,12 @@ def list_available_credits(
 ) -> List[schemas.MarketplaceCreditOut]:
     credits = (
         db.query(models.CarbonCredit)
+        .options(
+            joinedload(models.CarbonCredit.project)
+            .joinedload(models.CarbonProject.farm),
+            joinedload(models.CarbonCredit.project)
+            .joinedload(models.CarbonProject.plot),
+        )
         .filter(models.CarbonCredit.status == "available")
         .order_by(models.CarbonCredit.created_at.desc())
         .limit(500)

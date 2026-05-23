@@ -140,6 +140,7 @@ class Plot(Base):
     tree_lines = relationship(
         "TreeLine", back_populates="plot", cascade="all, delete-orphan"
     )
+    carbon_projects = relationship("CarbonProject", back_populates="plot")
 
 
 class TreeLine(Base):
@@ -246,7 +247,7 @@ class CarbonProject(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
     farm = relationship("Farm", back_populates="carbon_projects")
-    plot = relationship("Plot")
+    plot = relationship("Plot", back_populates="carbon_projects")
     credits = relationship(
         "CarbonCredit", back_populates="project", cascade="all, delete-orphan"
     )

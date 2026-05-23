@@ -1262,6 +1262,7 @@ const styles = {
   transactionRef: { color: COLORS.forest, fontWeight: 800 },
   compactText: { margin: 0, color: COLORS.muted, fontSize: 13, lineHeight: 1.4 },
   creditCard: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: 12 },
+  priceBadge: { background: COLORS.mint, color: COLORS.forest, borderRadius: 999, padding: "3px 9px", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap" },
   smallButton: { border: 0, background: COLORS.forest, color: COLORS.cream, borderRadius: 999, padding: "9px 12px", fontWeight: 900, cursor: "pointer" },
   tinyButton: { border: `1px solid ${COLORS.border}`, background: "white", color: COLORS.forest, borderRadius: 999, padding: "7px 10px", fontWeight: 900, cursor: "pointer", fontSize: 12 },
   inlineActions: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" },
