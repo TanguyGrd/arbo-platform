@@ -47,13 +47,13 @@ function AnimatedStat({ value, prefix = "", suffix = "", label }) {
   }, [value]);
 
   return (
-    <article ref={ref} className="stat-card rounded-[2rem] border border-[#0F3D24]/10 bg-white p-6 shadow-[0_24px_70px_rgba(15,61,36,0.08)] md:p-8">
-      <p className="text-5xl font-extrabold tracking-tight text-[#0F3D24] md:text-6xl">
+    <article ref={ref} className="landing-stat rounded-[1.75rem] border border-[#0F3D24]/10 bg-white p-5 shadow-[0_18px_45px_rgba(15,61,36,0.07)] md:p-6">
+      <p className="text-4xl font-black tracking-tight text-[#0F3D24] md:text-5xl">
         {prefix}
         {displayValue}
         {suffix}
       </p>
-      <p className="mt-4 text-base font-semibold leading-7 text-[#627466]">{label}</p>
+      <p className="mt-3 text-sm font-semibold leading-6 text-[#87A878]">{label}</p>
     </article>
   );
 }
