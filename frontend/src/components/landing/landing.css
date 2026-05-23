@@ -20,25 +20,93 @@ body {
   text-decoration: none;
 }
 
+.landing-page button,
+.landing-page summary {
+  font: inherit;
+}
+
+.landing-header {
+  box-shadow: 0 12px 40px rgba(15, 61, 36, 0.08);
+}
+
+.landing-nav-link {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  transition: color 180ms ease;
+}
+
+.landing-nav-link:hover {
+  color: #2ecc71;
+}
+
+.landing-mobile-link {
+  border: 0;
+  border-radius: 18px;
+  background: white;
+  color: #0f3d24;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 14px 16px;
+  text-align: left;
+}
+
 .landing-page .hero-photo {
   background-image:
-    linear-gradient(90deg, rgba(15, 61, 36, 0.92) 0%, rgba(15, 61, 36, 0.78) 46%, rgba(15, 61, 36, 0.28) 100%),
+    linear-gradient(90deg, rgba(15, 61, 36, 0.94) 0%, rgba(15, 61, 36, 0.82) 48%, rgba(15, 61, 36, 0.34) 100%),
     url("https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=2200&q=85");
 }
 
-.landing-page .stat-card {
-  animation: landing-rise 700ms ease both;
+.landing-tabs {
+  scrollbar-width: none;
 }
 
-.landing-page .stat-card:nth-child(2) {
+.landing-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.landing-tab {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #0f3d24;
+  cursor: pointer;
+  flex: 1 0 max-content;
+  font-weight: 900;
+  padding: 12px 18px;
+  transition:
+    background 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+  white-space: nowrap;
+}
+
+.landing-tab:hover {
+  background: rgba(15, 61, 36, 0.06);
+}
+
+.landing-tab-active {
+  background: #0f3d24;
+  color: #faf9f6;
+}
+
+.landing-tab-content,
+.landing-panel,
+.landing-stat {
+  animation: landing-rise 520ms ease both;
+}
+
+.landing-stat:nth-child(2) {
   animation-delay: 110ms;
 }
 
-.landing-page .stat-card:nth-child(3) {
+.landing-stat:nth-child(3) {
   animation-delay: 220ms;
 }
 
-.landing-page details[open] summary svg {
+.landing-faq[open] summary svg {
   transform: rotate(45deg);
 }
 
@@ -59,7 +127,17 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-page .stat-card {
+  .landing-tab,
+  .landing-tab-content,
+  .landing-panel,
+  .landing-stat {
     animation: none;
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .landing-tab {
+    padding-inline: 14px;
   }
 }
