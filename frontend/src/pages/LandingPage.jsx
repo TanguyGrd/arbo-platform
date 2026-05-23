@@ -90,7 +90,24 @@ function LandingPage() {
         )}
       </header>
 
-      <main className="pt-20">
+      <div className="landing-tab-bar fixed inset-x-0 top-20 z-30 border-y border-[#0F3D24]/10 bg-[#FAF9F6]/96 backdrop-blur-xl">
+        <div className="mx-auto max-w-7xl overflow-x-auto px-5 py-3 md:px-8">
+          <div className="landing-tabs inline-flex min-w-full gap-2 rounded-full bg-white p-1.5 shadow-[0_18px_50px_rgba(15,61,36,0.08)] md:min-w-0">
+            {tabs.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => showTab(id)}
+                className={activeTab === id ? "landing-tab landing-tab-active" : "landing-tab"}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <main className="pt-36">
         <section className="hero-photo relative isolate overflow-hidden bg-cover bg-center">
           <div className="absolute inset-0 bg-[#0F3D24]/10" />
           <div className="relative z-10 mx-auto grid min-h-[680px] w-full max-w-7xl items-center gap-12 px-5 py-20 md:px-8 lg:grid-cols-[1.05fr_0.95fr]">
@@ -128,23 +145,6 @@ function LandingPage() {
                 Un seul espace pour simuler, publier et vendre vos crédits carbone agroforestiers.
               </p>
             </aside>
-          </div>
-        </section>
-
-        <section className="sticky top-20 z-30 border-y border-[#0F3D24]/10 bg-[#FAF9F6]/96 backdrop-blur-xl">
-          <div className="mx-auto max-w-7xl overflow-x-auto px-5 py-3 md:px-8">
-            <div className="landing-tabs inline-flex min-w-full gap-2 rounded-full bg-white p-1.5 shadow-[0_18px_50px_rgba(15,61,36,0.08)] md:min-w-0">
-              {tabs.map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => showTab(id)}
-                  className={activeTab === id ? "landing-tab landing-tab-active" : "landing-tab"}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
           </div>
         </section>
 
