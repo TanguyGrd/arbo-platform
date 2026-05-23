@@ -1,0 +1,65 @@
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+}
+
+.landing-page {
+  box-sizing: border-box;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.landing-page *,
+.landing-page *::before,
+.landing-page *::after {
+  box-sizing: inherit;
+}
+
+.landing-page a {
+  text-decoration: none;
+}
+
+.landing-page .hero-photo {
+  background-image:
+    linear-gradient(90deg, rgba(15, 61, 36, 0.92) 0%, rgba(15, 61, 36, 0.78) 46%, rgba(15, 61, 36, 0.28) 100%),
+    url("https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=2200&q=85");
+}
+
+.landing-page .stat-card {
+  animation: landing-rise 700ms ease both;
+}
+
+.landing-page .stat-card:nth-child(2) {
+  animation-delay: 110ms;
+}
+
+.landing-page .stat-card:nth-child(3) {
+  animation-delay: 220ms;
+}
+
+.landing-page details[open] summary svg {
+  transform: rotate(45deg);
+}
+
+.landing-page summary::-webkit-details-marker {
+  display: none;
+}
+
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-page .stat-card {
+    animation: none;
+  }
+}
